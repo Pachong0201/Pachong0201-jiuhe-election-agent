@@ -28,6 +28,11 @@ log = logging.getLogger(__name__)
 REPORT_RE = re.compile(r"^/report\s*(.*)$", re.I)
 RESET_RE = re.compile(r"^/reset\s*$", re.I)
 HELP_RE = re.compile(r"^/(help|幫助|帮助)\s*$", re.I)
+# free-text questions that ask for a race situation report
+ANALYSIS_RE = re.compile(r"選情|選戰|態勢|情势|分析報告|分析报告|如何|怎麼樣|怎么样")
+COUNTY_RE = re.compile(
+    r"台北|臺北|新北|桃園|台中|臺中|台南|臺南|高雄|基隆|新竹|嘉義|宜蘭|彰化|南投|"
+    r"雲林|苗栗|屏東|花蓮|臺東|台東|澎湖|金門|連江|馬祖")
 
 HELP_TEXT = (
     "**九合一選情分析智能體**\n"
@@ -130,19 +135,32 @@ class FeishuBot:
             self._reply(msg.message_id, text_message(HELP_TEXT))
             return
 
-        report_match = REPORT_RE.match(text)
-        if report_match is not None:
-            county = report_match.group(1).strip()
-            prompt = (
+        def report_prompt(county: str) -> str:
+            return (
                 f"請產出「{county}」2026九合一縣市長選舉的完整分析報告，"
                 "嚴格遵循分析報告結構（態勢速覽→參選格局→近期動態→民調檢視→"
-                "結構基礎→地方因素→態勢判斷→資料缺口）。"
+                "結構基礎→地方因素→態勢判斷→資料缺口），"
+                "先給態勢判斷再列證據，不要輸出新聞清單。"
                 if county else
                 "使用者要求完整報告但未指定縣市，請詢問要分析哪個縣市。"
             )
+
+        report_match = REPORT_RE.match(text)
+        if report_match is not None:
+            county = report_match.group(1).strip()
             threading.Thread(
                 target=self._handle_query,
-                args=(msg.message_id, chat_id, prompt, True),
+                args=(msg.message_id, chat_id, report_prompt(county), True),
+                daemon=True,
+            ).start()
+            return
+
+        # free-text analysis questions get the same structured report
+        if COUNTY_RE.search(text) and ANALYSIS_RE.search(text):
+            county = COUNTY_RE.search(text).group(0)  # type: ignore[union-attr]
+            threading.Thread(
+                target=self._handle_query,
+                args=(msg.message_id, chat_id, report_prompt(county), True),
                 daemon=True,
             ).start()
             return
