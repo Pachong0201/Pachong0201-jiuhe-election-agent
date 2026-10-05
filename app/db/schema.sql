@@ -38,11 +38,12 @@ CREATE TABLE IF NOT EXISTS race_candidates (
     county      TEXT NOT NULL,
     name        TEXT NOT NULL,
     party       TEXT NOT NULL DEFAULT '',
+    office      TEXT NOT NULL DEFAULT '',   -- mayor | councilor | township_mayor | township_rep | village_chief | unknown
     status      TEXT NOT NULL DEFAULT 'declared', -- declared | registered | withdrawn
     incumbent   INTEGER NOT NULL DEFAULT 0,
     source      TEXT NOT NULL DEFAULT '',
     updated_at  TEXT NOT NULL DEFAULT '',
-    UNIQUE(cycle, county, name)
+    UNIQUE(cycle, county, name, office)
 );
 
 CREATE TABLE IF NOT EXISTS polls (

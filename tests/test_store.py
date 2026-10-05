@@ -65,10 +65,15 @@ class TestStore(unittest.TestCase):
 
     def test_race_candidates(self):
         self.store.upsert_race_candidate("2026", "台北市", "蔣萬安",
-                                         party="中國國民黨", incumbent=True)
+                                         party="中國國民黨", office="mayor",
+                                         incumbent=True)
+        self.store.upsert_race_candidate("2026", "台北市", "某人",
+                                         office="councilor")
         rows = self.store.race_candidates("2026", "臺北市")
-        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows), 1)  # mayor-only default
         self.assertEqual(rows[0]["incumbent"], 1)
+        self.assertEqual(len(self.store.race_candidates(
+            "2026", "臺北市", office=None)), 2)
 
     def test_fts_search(self):
         self.store.add_knowledge("台中", "faction", "台中紅黑派長期影響地方選舉")

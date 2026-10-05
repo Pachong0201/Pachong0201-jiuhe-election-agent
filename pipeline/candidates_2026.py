@@ -66,26 +66,35 @@ def _get(url: str) -> bytes:
         return r.read()
 
 
-def find_roster_links(page_url: str) -> list[str]:
-    """Links on the CEC page that look like mayor-roster files."""
+def office_from_label(label: str) -> str:
+    """Classify a roster file's office type from its link text / URL."""
+    if "直轄市長" in label or "縣市長" in label or "縣市市長" in label:
+        return "mayor"
+    if "議員" in label:
+        return "councilor"
+    if "鄉鎮市長" in label:
+        return "township_mayor"
+    if "代表" in label:
+        return "township_rep"
+    if "里長" in label or "村長" in label:
+        return "village_chief"
+    return "unknown"
+
+
+def find_roster_links(page_url: str) -> list[tuple[str, str]]:
+    """(url, link_text) pairs for roster files linked on the CEC page."""
     html = _get(page_url).decode("utf-8", errors="replace")
     parser = _LinkParser()
     parser.feed(html)
     out = []
     for href, text in parser.links:
-        label = text + " " + href
-        if ("市長" in label or "縣市" in label or "地方公職" in label) and \
-                href.lower().endswith((".pdf", ".xls", ".xlsx", ".ods")):
-            out.append(urllib.parse.urljoin(page_url, href))
-    if not out:  # fallback: any linked data file
-        for href, text in parser.links:
-            if href.lower().endswith((".pdf", ".xls", ".xlsx", ".ods")):
-                out.append(urllib.parse.urljoin(page_url, href))
+        if href.lower().endswith((".pdf", ".xls", ".xlsx", ".ods")):
+            out.append((urllib.parse.urljoin(page_url, href), text))
     return out
 
 
 def parse_pdf(content: bytes, source: str, store: Store,
-              cycle: str) -> tuple[int, int]:
+              cycle: str, office: str) -> tuple[int, int]:
     """Best-effort extraction of (county, name, party) triples from a PDF."""
     import pdfplumber
 
@@ -114,7 +123,7 @@ def parse_pdf(content: bytes, source: str, store: Store,
                     dropped += 1
                     continue
                 store.upsert_race_candidate(
-                    cycle=cycle, county=county, name=names[0],
+                    cycle=cycle, county=county, name=names[0], office=office,
                     status="registered", source=source,
                 )
                 kept += 1
@@ -122,7 +131,7 @@ def parse_pdf(content: bytes, source: str, store: Store,
 
 
 def parse_xlsx(content: bytes, source: str, store: Store,
-               cycle: str) -> tuple[int, int]:
+               cycle: str, office: str) -> tuple[int, int]:
     import openpyxl
 
     kept, dropped = 0, 0
@@ -148,7 +157,7 @@ def parse_xlsx(content: bytes, source: str, store: Store,
                 dropped += 1
                 continue
             store.upsert_race_candidate(
-                cycle=cycle, county=county, name=names[0],
+                cycle=cycle, county=county, name=names[0], office=office,
                 status="registered", source=source,
             )
             kept += 1
@@ -160,8 +169,9 @@ def run(page_url: str, db_path: Path, cycle: str) -> None:
     links = find_roster_links(page_url)
     log.info("found %d roster link(s)", len(links))
     total_kept = total_dropped = 0
-    for url in links:
-        log.info("fetching %s", url)
+    for url, text in links:
+        office = office_from_label(text + " " + url)
+        log.info("fetching %s (office=%s, label=%s)", url, office, text[:40])
         try:
             content = _get(url)
         except Exception as e:  # noqa: BLE001
@@ -172,9 +182,9 @@ def run(page_url: str, db_path: Path, cycle: str) -> None:
         local.write_bytes(content)
         try:
             if url.lower().endswith(".pdf"):
-                kept, dropped = parse_pdf(content, url, store, cycle)
+                kept, dropped = parse_pdf(content, url, store, cycle, office)
             elif url.lower().endswith((".xls", ".xlsx", ".ods")):
-                kept, dropped = parse_xlsx(content, url, store, cycle)
+                kept, dropped = parse_xlsx(content, url, store, cycle, office)
             else:
                 continue
         except Exception as e:  # noqa: BLE001

@@ -130,18 +130,19 @@ class Store:
         county: str,
         name: str,
         party: str = "",
+        office: str = "",
         status: str = "declared",
         incumbent: bool = False,
         source: str = "",
         updated_at: str = "",
     ) -> None:
         self.conn.execute(
-            "INSERT INTO race_candidates(cycle, county, name, party, status, incumbent, source, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?)"
-            " ON CONFLICT(cycle, county, name) DO UPDATE SET"
+            "INSERT INTO race_candidates(cycle, county, name, party, office, status, incumbent, source, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(cycle, county, name, office) DO UPDATE SET"
             " party=excluded.party, status=excluded.status, incumbent=excluded.incumbent,"
             " source=excluded.source, updated_at=excluded.updated_at",
-            (cycle, normalize_county(county), name, party, status,
+            (cycle, normalize_county(county), name, party, office, status,
              int(incumbent), source, updated_at),
         )
         self.conn.commit()
@@ -234,17 +235,19 @@ class Store:
         )
 
     def race_candidates(self, cycle: str = "2026",
-                        county: Optional[str] = None) -> list[dict]:
+                        county: Optional[str] = None,
+                        office: Optional[str] = "mayor") -> list[dict]:
+        """Registered/declared candidates; office=None returns every office."""
+        sql = "SELECT * FROM race_candidates WHERE cycle=?"
+        params: list = [cycle]
         if county:
-            return self._rows(
-                "SELECT * FROM race_candidates WHERE cycle=? AND county=?"
-                " ORDER BY status, party, name",
-                (cycle, normalize_county(county)),
-            )
-        return self._rows(
-            "SELECT * FROM race_candidates WHERE cycle=? ORDER BY county, party, name",
-            (cycle,),
-        )
+            sql += " AND county=?"
+            params.append(normalize_county(county))
+        if office:
+            sql += " AND office=?"
+            params.append(office)
+        sql += " ORDER BY county, status, party, name"
+        return self._rows(sql, tuple(params))
 
     def polls_for(self, county: str = "", days: Optional[int] = None,
                   limit: int = 20) -> list[dict]:

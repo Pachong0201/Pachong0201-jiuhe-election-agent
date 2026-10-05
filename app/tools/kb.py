@@ -45,11 +45,13 @@ def township_results_tool(store: Store, county: str, year: int,
 
 
 def race_candidates_tool(store: Store, county: str = "",
-                         cycle: str = "2026") -> dict:
+                         office: str = "mayor", cycle: str = "2026") -> dict:
     return {
         "cycle": cycle,
         "county": normalize_county(county) if county else "",
-        "candidates": store.race_candidates(cycle, county or None),
+        "office": office,
+        "candidates": store.race_candidates(
+            cycle, county or None, office or None),
     }
 
 

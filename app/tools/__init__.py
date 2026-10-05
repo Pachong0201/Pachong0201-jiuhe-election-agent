@@ -38,8 +38,10 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
             kb.county_results_tool(store, county, year, kind),
         "township_results": lambda county, year, kind="county_mayor":
             kb.township_results_tool(store, county, year, kind),
-        "race_candidates": lambda county="":
-            kb.race_candidates_tool(store, county, config.race_cycle),
+        "race_candidates": lambda county="", office="mayor":
+            kb.race_candidates_tool(
+                store, county, "" if office == "all" else office,
+                config.race_cycle),
         "get_polls": lambda county="", days=90:
             kb.polls_tool(store, county, days),
         "recent_events": lambda county="", days=30:
@@ -66,8 +68,11 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
         _fn("township_results", "查詢某縣市某次選舉的鄉鎮市區級候選人得票（看票倉分佈）",
             {"county": _COUNTY, "year": _YEAR, "kind": {"type": "string"}},
             ["county", "year"]),
-        _fn("race_candidates", "查詢本屆（2026九合一）各縣市已表態/登記候選人名單",
-            {"county": {**_COUNTY, "description": "留空則回傳全部縣市"}}, []),
+        _fn("race_candidates", "查詢本屆（2026九合一）各縣市已表態/登記候選人名單，預設只看縣市長",
+            {"county": {**_COUNTY, "description": "留空則回傳全部縣市"},
+             "office": {"type": "string",
+                        "enum": ["mayor", "councilor", "township_mayor", "township_rep", "village_chief", "all"],
+                        "description": "公職類型，預設 mayor（縣市長）"}}, []),
         _fn("get_polls", "查詢民調庫中某縣市近期民調（保留機構/方法/時間元數據）",
             {"county": {**_COUNTY, "description": "留空查全部"},
              "days": {"type": "integer", "description": "最近N天，預設90"}}, []),
