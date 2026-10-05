@@ -93,6 +93,56 @@ def find_roster_links(page_url: str) -> list[tuple[str, str]]:
     return out
 
 
+def _header_index(row: list) -> dict:
+    """Map roster header labels to column indexes; {} if not a header row."""
+    idx: dict[str, int] = {}
+    for i, c in enumerate(row):
+        c = re.sub(r"\s+", "", c or "")
+        if "姓名" in c:
+            idx.setdefault("name", i)
+        if "政黨" in c:
+            idx.setdefault("party", i)
+        if "選舉區" in c or c in COUNTY_ALIASES:
+            idx.setdefault("county", i)
+    return idx if "name" in idx else {}
+
+
+def _norm_party(raw: str) -> str:
+    p = re.sub(r"\s+", "", raw or "")
+    return {"": "", "無": "無黨籍", "无": "無黨籍"}.get(p, p)
+
+
+def _extract_row(row: list, cols: dict, county_pat: str):
+    """Return (county, name, party) or None. Uses header columns when known,
+    else falls back to CJK-name heuristics."""
+    cells = [(c or "").strip() for c in row]
+    if cols:
+        name = cells[cols["name"]] if cols["name"] < len(cells) else ""
+        if not re.fullmatch(r"[一-鿿]{2,5}", name):
+            return None
+        party = _norm_party(
+            cells[cols["party"]] if cols.get("party", 9**9) < len(cells) else "")
+        joined = " ".join(c for c in cells if c)
+        m = re.search(county_pat, joined)
+        if not m:
+            return None
+        return COUNTY_ALIASES.get(m.group(0), m.group(0)), name, party
+    filled = [c for c in cells if c]
+    if len(filled) < 2:
+        return None
+    joined = " ".join(filled)
+    m = re.search(county_pat, joined)
+    if not m:
+        return None
+    names = [c for c in filled
+             if re.fullmatch(r"[一-鿿]{2,4}", c)
+             and c not in COUNTY_ALIASES
+             and not re.search(county_pat, c)]
+    if not names:
+        return None
+    return COUNTY_ALIASES.get(m.group(0), m.group(0)), names[0], ""
+
+
 def parse_pdf(content: bytes, source: str, store: Store,
               cycle: str, office: str) -> tuple[int, int]:
     """Best-effort extraction of (county, name, party) triples from a PDF."""
@@ -100,31 +150,24 @@ def parse_pdf(content: bytes, source: str, store: Store,
 
     kept, dropped = 0, 0
     county_pat = "|".join(sorted(COUNTIES, key=len, reverse=True))
+    cols: dict = {}
     with pdfplumber.open(io.BytesIO(content)) as pdf:
         for page in pdf.pages:
             table = page.extract_table() or []
             for row in table:
-                cells = [(c or "").strip() for c in row if (c or "").strip()]
-                if len(cells) < 2:
+                hdr = _header_index(row)
+                if hdr:
+                    cols = hdr
                     continue
-                joined = " ".join(cells)
-                m = re.search(county_pat, joined)
-                if not m:
+                got = _extract_row(row, cols, county_pat)
+                if not got:
+                    if row and any((c or "").strip() for c in row):
+                        dropped += 1
                     continue
-                county = COUNTY_ALIASES.get(m.group(0), m.group(0))
-                # name: the shortest CJK-only cell that isn't the county
-                names = [
-                    c for c in cells
-                    if re.fullmatch(r"[一-鿿]{2,4}", c)
-                    and c not in COUNTY_ALIASES
-                    and not re.search(county_pat, c)
-                ]
-                if not names:
-                    dropped += 1
-                    continue
+                county, name, party = got
                 store.upsert_race_candidate(
-                    cycle=cycle, county=county, name=names[0], office=office,
-                    status="registered", source=source,
+                    cycle=cycle, county=county, name=name, office=office,
+                    party=party, status="registered", source=source,
                 )
                 kept += 1
     return kept, dropped
@@ -136,29 +179,24 @@ def parse_xlsx(content: bytes, source: str, store: Store,
 
     kept, dropped = 0, 0
     county_pat = "|".join(sorted(COUNTIES, key=len, reverse=True))
+    cols: dict = {}
     wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True)
     for ws in wb.worksheets:
         for row in ws.iter_rows(values_only=True):
-            cells = [str(c).strip() for c in row if c and str(c).strip()]
-            if len(cells) < 2:
+            row = [str(c) if c is not None else "" for c in row]
+            hdr = _header_index(row)
+            if hdr:
+                cols = hdr
                 continue
-            joined = " ".join(cells)
-            m = re.search(county_pat, joined)
-            if not m:
+            got = _extract_row(row, cols, county_pat)
+            if not got:
+                if any(c.strip() for c in row):
+                    dropped += 1
                 continue
-            county = COUNTY_ALIASES.get(m.group(0), m.group(0))
-            names = [
-                c for c in cells
-                if re.fullmatch(r"[一-鿿]{2,4}", c)
-                and c not in COUNTY_ALIASES
-                and not re.search(county_pat, c)
-            ]
-            if not names:
-                dropped += 1
-                continue
+            county, name, party = got
             store.upsert_race_candidate(
-                cycle=cycle, county=county, name=names[0], office=office,
-                status="registered", source=source,
+                cycle=cycle, county=county, name=name, office=office,
+                party=party, status="registered", source=source,
             )
             kept += 1
     return kept, dropped

@@ -1,7 +1,9 @@
 """Real-time retrieval tools: web search + page fetch.
 
 Search providers:
-- duckduckgo (default, no key needed; uses the ddgs/duckduckgo_search package)
+- auto       (default) Google News RSS first (zh-TW), duckduckgo as fallback
+- gnews      Google News RSS only
+- duckduckgo (no key needed; flaky for CJK bursts)
 - tavily     (needs TAVILY_API_KEY)
 
 fetch_url extracts main text heuristically and truncates for LLM context.
@@ -10,8 +12,10 @@ fetch_url extracts main text heuristically and truncates for LLM context.
 from __future__ import annotations
 
 import re
+import urllib.parse
 from html.parser import HTMLParser
 from typing import Optional
+from xml.etree import ElementTree as ET
 
 import httpx
 
@@ -20,10 +24,36 @@ _MAX_CHARS = 6000
 
 
 def web_search(query: str, max_results: int = 6,
-               provider: str = "duckduckgo", tavily_key: str = "") -> dict:
+               provider: str = "auto", tavily_key: str = "") -> dict:
     if provider == "tavily":
         return _tavily(query, max_results, tavily_key)
+    if provider in ("auto", "gnews"):
+        try:
+            out = _gnews(query, max_results)
+            if out["results"] or provider == "gnews":
+                return out
+        except Exception:  # noqa: BLE001 — fall through to ddg
+            pass
     return _ddg(query, max_results)
+
+
+def _gnews(query: str, max_results: int) -> dict:
+    """Google News RSS search (zh-TW): reliable, current, includes pubDate."""
+    q = urllib.parse.quote(query)
+    url = ("https://news.google.com/rss/search"
+           f"?q={q}&hl=zh-TW&gl=TW&ceid=TW:zh-Hant")
+    resp = httpx.get(url, headers=_UA, timeout=20)
+    resp.raise_for_status()
+    out = []
+    for it in list(ET.fromstring(resp.content).iter("item"))[:max_results]:
+        snippet = re.sub(r"<[^>]+>", "", it.findtext("description", ""))
+        out.append({
+            "title": it.findtext("title", ""),
+            "url": it.findtext("link", ""),
+            "snippet": snippet[:300],
+            "published": it.findtext("pubDate", ""),
+        })
+    return {"query": query, "provider": "google_news", "results": out}
 
 
 def _ddg(query: str, max_results: int) -> dict:
@@ -33,7 +63,9 @@ def _ddg(query: str, max_results: int) -> dict:
         from duckduckgo_search import DDGS  # type: ignore
     out = []
     with DDGS() as ddgs:
-        for r in ddgs.text(query, region="tw-tzh", max_results=max_results):
+        # region="tw-tzh" returns empty/garbage for CJK queries via the bing
+        # backend; wt-wt (worldwide) works for both zh and en.
+        for r in ddgs.text(query, region="wt-wt", max_results=max_results):
             out.append({
                 "title": r.get("title", ""),
                 "url": r.get("href", ""),

@@ -65,4 +65,4 @@ tests/    單元測試
 
 - TVBS 民調 PDF 解析是 best-effort；解析不出的原始文件留在 `data/cache/polls/` 供人工補錄
 - 區域立委的選區維度未細分（同縣市多選區的候選人 join 是近似值），主軸縣市長不受影響
-- DuckDuckGo 檢索偶爾被限流；有 Tavily key 可切 `SEARCH_PROVIDER=tavily`
+- 即時檢索預設走 Google 新聞 RSS（繁中台灣新聞，免 key），DuckDuckGo 備援；有 Tavily key 可切 `SEARCH_PROVIDER=tavily`

@@ -44,7 +44,7 @@ class Config:
     zhipu_api_key: str = os.environ.get("ZHIPU_API_KEY", "")          # GLM
 
     # Web retrieval
-    search_provider: str = os.environ.get("SEARCH_PROVIDER", "duckduckgo")
+    search_provider: str = os.environ.get("SEARCH_PROVIDER", "auto")
     tavily_api_key: str = os.environ.get("TAVILY_API_KEY", "")
 
     # Storage

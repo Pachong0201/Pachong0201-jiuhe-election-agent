@@ -75,8 +75,21 @@ def find_poll_links(index_url: str = INDEX_URL) -> list[tuple[str, str]]:
     return out
 
 
-def parse_poll_pdf(content: bytes) -> dict:
-    """Extract publish date + support table from a TVBS poll PDF."""
+# Common CJK variant mismatches between the CEC roster and media text
+# (roster has 張啓楷, news writes 張啟楷). Keys normalize to the value char.
+_VARIANTS = {"啓": "啟", "栢": "柏", "台": "臺"}
+
+
+def _norm_name(s: str) -> str:
+    return "".join(_VARIANTS.get(ch, ch) for ch in s)
+
+
+def parse_poll_pdf(content: bytes, names: list[str],
+                   source_url: str = "") -> dict:
+    """Extract fieldwork date, method, sample, and candidate support from a
+    TVBS poll PDF. Candidate numbers are anchored to known roster names via
+    explicit 支持度 phrasing — methodology figures (信心水準, 拒訪率) are never
+    captured."""
     import pdfplumber
 
     text_parts = []
@@ -86,21 +99,47 @@ def parse_poll_pdf(content: bytes) -> dict:
     text = "\n".join(text_parts)
 
     meta: dict = {"results": {}}
-    m = re.search(r"(20\d{2})\s*年?\s*(\d{1,2})\s*月?\s*(\d{1,2})\s*日", text)
+
+    # 訪問時間 | 115 年 4 月 24 日至 30 日 → fieldwork_end (ROC year + 1911)
+    m = re.search(
+        r"訪問時間[^\n]*?(\d{2,3})\s*年\s*(\d{1,2})\s*月\s*\d{1,2}\s*日"
+        r"[^\n]*?至\s*(?:\d{1,2}\s*月\s*)?(\d{1,2})\s*日", text)
     if m:
-        meta["publish_date"] = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-    m = re.search(r"有效樣本[：: ]*(\d{3,5})", text)
+        meta["fieldwork_end"] = (f"{int(m.group(1)) + 1911}-"
+                                 f"{int(m.group(2)):02d}-{int(m.group(3)):02d}")
+    # publish_date from URL path /poll_center/2026/20260505/
+    m = re.search(r"poll_center/(\d{4})/(\d{4})(\d{2})(\d{2})/", source_url)
+    if m:
+        meta["publish_date"] = f"{m.group(2)}-{m.group(3)}-{m.group(4)}"
+    else:
+        m = re.search(r"(20\d{2})\s*年?\s*(\d{1,2})\s*月?\s*(\d{1,2})\s*日", text)
+        if m:
+            meta["publish_date"] = (f"{m.group(1)}-{int(m.group(2)):02d}-"
+                                    f"{int(m.group(3)):02d}")
+    m = re.search(r"有效樣本[^\d\n]{0,12}(\d{3,5})", text)
     if m:
         meta["sample_n"] = int(m.group(1))
-    m = re.search(r"(市話|手機|網路|CATI|RDD)[^\n]{0,20}", text)
+    m = re.search(r"調查方法[^\n]*", text)
     if m:
-        meta["method"] = m.group(0).strip()
+        meta["method"] = re.sub(r"^調查方法\s*[|：:]\s*", "", m.group(0))[:80]
 
-    # support rows look like: 候選人名字  23.5  or 名字（政黨）23.5%
-    for line in text.split("\n"):
-        for name, pct in re.findall(
-                r"([一-鿿]{2,4})[^\d]{0,12}(\d{1,2}\.\d)\s*%?", line):
-            meta["results"].setdefault(name, float(pct))
+    # candidate support, anchored to roster names (variant-normalized)
+    text_n = _norm_name(text)
+    for name in names:
+        pats = [
+            re.escape(_norm_name(name)) + r"(?:的)?支持度(?:為|是|：)?\s*[約達]?\s*"
+                              r"(\d+(?:\.\d+)?)\s*%",
+            r"(\d+(?:\.\d+)?)\s*%[^\d%]{0,6}?" + re.escape(_norm_name(name)),
+            re.escape(_norm_name(name)) + r"\s*[（(]\s*(\d+(?:\.\d+)?)\s*%",
+        ]
+        for pat in pats:
+            m = re.search(pat, text_n)
+            if m:
+                meta["results"][name] = float(m.group(1))
+                break
+    m = re.search(r"(\d+(?:\.\d+)?)\s*%\s*(?:未決定|尚未決定|未表示)", text)
+    if m:
+        meta["results"]["未決定"] = float(m.group(1))
     return meta
 
 
@@ -121,20 +160,23 @@ def run(db_path: Path, index_url: str, since: str = "") -> None:
         raw_path.write_bytes(content)
         if ".pdf" not in url.lower():
             continue  # index pages we can't parse yet — file kept for audit
+        county = ""
+        m = re.search(COUNTY_PAT, title)
+        if m:
+            county = COUNTY_ALIASES.get(m.group(0), m.group(0))
+        names = [r["name"] for r in
+                 store.race_candidates("2026", county)] if county else []
         try:
-            meta = parse_poll_pdf(content)
+            meta = parse_poll_pdf(content, names, url)
         except Exception as e:  # noqa: BLE001
             log.warning("parse failed %s: %s", url, e)
             continue
         if since and meta.get("publish_date", "") < since:
             continue
-        county = ""
-        m = re.search(COUNTY_PAT, title)
-        if m:
-            county = COUNTY_ALIASES.get(m.group(0), m.group(0))
         store.add_poll(
             org="TVBS",
             publish_date=meta.get("publish_date", ""),
+            fieldwork_end=meta.get("fieldwork_end", ""),
             county=county,
             method=meta.get("method", ""),
             sample_n=meta.get("sample_n"),
