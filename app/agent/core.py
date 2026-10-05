@@ -1,0 +1,84 @@
+"""Agent core: runs the LLM tool-calling loop over a conversation history."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
+from ..config import Config
+from ..db.store import Store
+from .llm import LLM
+from ..tools import build_tools, run_tool
+
+log = logging.getLogger(__name__)
+
+PROMPTS_DIR = Path(__file__).resolve().parents[2] / "prompts"
+
+
+def _load_prompt(name: str) -> str:
+    p = PROMPTS_DIR / name
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def system_prompt(config: Config) -> str:
+    today = dt.date.today().isoformat()
+    return (
+        _load_prompt("system.md")
+        .replace("{{TODAY}}", today)
+        .replace("{{RACE_CYCLE}}", config.race_cycle)
+        + "\n\n"
+        + _load_prompt("analysis.md")
+    )
+
+
+class ElectionAgent:
+    def __init__(self, llm: LLM, store: Store, config: Config):
+        self.llm = llm
+        self.store = store
+        self.config = config
+        self.schemas, self.dispatch = build_tools(store, config)
+        self._system = system_prompt(config)
+
+    def answer(self, history: list[dict], user_text: str) -> str:
+        """Run the tool loop and return the final assistant message text."""
+        messages: list[dict] = [{"role": "system", "content": self._system}]
+        messages.extend(history)
+        messages.append({"role": "user", "content": user_text})
+
+        for round_i in range(self.config.max_tool_rounds):
+            resp = self.llm.chat(messages, tools=self.schemas)
+            msg = resp.choices[0].message
+
+            tool_calls = getattr(msg, "tool_calls", None) or []
+            if not tool_calls:
+                return (msg.content or "").strip() or "（無法產生回覆）"
+
+            # Append assistant turn with tool calls, then each tool result.
+            messages.append({
+                "role": "assistant",
+                "content": msg.content or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.function.name,
+                                     "arguments": tc.function.arguments},
+                    }
+                    for tc in tool_calls
+                ],
+            })
+            for tc in tool_calls:
+                log.info("tool %s(%s)", tc.function.name,
+                         (tc.function.arguments or "")[:120])
+                result = run_tool(self.dispatch, tc.function.name,
+                                  tc.function.arguments)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result[:20000],
+                })
+
+        return "（查詢輪數達上限，請把問題拆小再問一次）"
