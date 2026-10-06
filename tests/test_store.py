@@ -86,3 +86,18 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPollsFallback(unittest.TestCase):
+    def test_falls_back_to_latest_when_window_empty(self):
+        import tempfile
+        from pathlib import Path
+        from app.db.store import Store
+        from app.tools import kb
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite3")
+            store.add_poll(org="TVBS", publish_date="2020-01-01",
+                           county="高雄市", results_json='{"A": 40}')
+            out = kb.polls_tool(store, "高雄市", days=30)
+            self.assertEqual(len(out["polls"]), 1)
+            self.assertTrue(out["note"])

@@ -42,7 +42,7 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
             kb.race_candidates_tool(
                 store, county, "" if office == "all" else office,
                 config.race_cycle),
-        "get_polls": lambda county="", days=90:
+        "get_polls": lambda county="", days=180:
             kb.polls_tool(store, county, days),
         "recent_events": lambda county="", days=30:
             kb.events_tool(store, county, days),
@@ -75,7 +75,7 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
                         "description": "公職類型，預設 mayor（縣市長）"}}, []),
         _fn("get_polls", "查詢民調庫中某縣市近期民調（保留機構/方法/時間元數據）",
             {"county": {**_COUNTY, "description": "留空查全部"},
-             "days": {"type": "integer", "description": "最近N天，預設90"}}, []),
+             "days": {"type": "integer", "description": "最近N天，預設180；無資料時回傳庫中最新幾份"}}, []),
         _fn("recent_events", "查詢已入庫的近期選戰事件（造勢、民調發布、表態、爭議等）",
             {"county": {**_COUNTY, "description": "留空查全部"},
              "days": {"type": "integer", "description": "最近N天，預設30"}}, []),

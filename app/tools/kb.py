@@ -55,10 +55,16 @@ def race_candidates_tool(store: Store, county: str = "",
     }
 
 
-def polls_tool(store: Store, county: str = "", days: int = 90) -> dict:
+def polls_tool(store: Store, county: str = "", days: int = 180) -> dict:
+    polls = store.polls_for(county or None, days=days)
+    note = ""
+    if not polls:
+        # fall back to the latest polls on file so the agent can still anchor
+        polls = store.polls_for(county or None, days=None, limit=5)
+        if polls:
+            note = f"近 {days} 天無民調，以下為庫中最新幾份（請標註時效）"
     return {"county": normalize_county(county) if county else "",
-            "days": days,
-            "polls": store.polls_for(county or None, days=days)}
+            "days": days, "note": note, "polls": polls}
 
 
 def events_tool(store: Store, county: str = "", days: int = 30) -> dict:
