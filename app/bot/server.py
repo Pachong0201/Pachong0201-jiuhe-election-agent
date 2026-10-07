@@ -6,21 +6,30 @@ im.message.receive_v1 events over the socket. Replies go through the REST API.
 
 from __future__ import annotations
 
+import datetime as dt
+import io
 import json
 import logging
 import threading
+import time
 import re
 
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import (
+    CreateFileRequest,
+    CreateFileRequestBody,
     P2ImMessageReceiveV1,
+    PatchMessageRequest,
+    PatchMessageRequestBody,
     ReplyMessageRequest,
     ReplyMessageRequestBody,
 )
 
 from ..agent.core import ElectionAgent
 from ..config import Config
-from .cards import report_messages, text_message
+from .cards import markdown_card, report_messages, report_summary, text_message
+from .docx_report import markdown_to_docx
+from .progress import Progress
 from .session import SessionRouter
 
 log = logging.getLogger(__name__)
@@ -94,7 +103,7 @@ class FeishuBot:
 
     # ------------------------------------------------------------- handlers
 
-    def _reply(self, message_id: str, payload: dict) -> None:
+    def _reply(self, message_id: str, payload: dict) -> str:
         req = (
             ReplyMessageRequest.builder()
             .message_id(message_id)
@@ -109,6 +118,40 @@ class FeishuBot:
         resp = self.client.im.v1.message.reply(req)
         if not resp.success():
             log.error("reply failed: %s %s", resp.code, resp.msg)
+            return ""
+        return resp.data.message_id if resp.data else ""
+
+    def _patch(self, message_id: str, payload: dict) -> None:
+        req = (
+            PatchMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                PatchMessageRequestBody.builder()
+                .content(payload["content"])
+                .build()
+            )
+            .build()
+        )
+        resp = self.client.im.v1.message.patch(req)
+        if not resp.success():
+            log.warning("patch failed: %s %s", resp.code, resp.msg)
+
+    def _upload_file(self, file_name: str, data: bytes) -> str:
+        req = (
+            CreateFileRequest.builder()
+            .request_body(
+                CreateFileRequestBody.builder()
+                .file_type("doc")
+                .file_name(file_name)
+                .file(io.BytesIO(data))
+                .build()
+            )
+            .build()
+        )
+        resp = self.client.im.v1.file.create(req)
+        if not resp.success():
+            raise RuntimeError(f"file upload failed: {resp.code} {resp.msg}")
+        return resp.data.file_key
 
     def _allowed(self, chat_id: str) -> bool:
         return not self.config.feishu_allow or chat_id in self.config.feishu_allow
@@ -179,16 +222,64 @@ class FeishuBot:
                         text_message("上一個問題還在分析中，請稍候再問。"))
             return
         try:
+            if is_report:
+                self._handle_report(message_id, session, text)
+                return
             answer = self.agent.answer(list(session.history), text)
             self.sessions.record_turn(session, text, answer)
-            title = None
-            if is_report:
-                county = text.split("「")[1].split("」")[0] if "「" in text else "選情"
-                title = f"{county}選情分析"
-            for payload in report_messages(title or "回覆", answer):
+            for payload in report_messages("回覆", answer):
                 self._reply(message_id, payload)
         except Exception as e:  # noqa: BLE001
             log.exception("query failed")
             self._reply(message_id, text_message(f"分析時出錯：{e}"[:300]))
         finally:
             self.sessions.release(chat_id)
+
+    def _handle_report(self, message_id: str, session, text: str) -> None:
+        county = text.split("「")[1].split("」")[0] if "「" in text else "選情"
+        title = f"{county}選情研判"
+        progress = Progress(title)
+        progress_id = self._reply(message_id, progress.card())
+        last_patch = [0.0]
+
+        def update(force: bool = False) -> None:
+            if not progress_id:
+                return
+            now = time.monotonic()
+            if force or now - last_patch[0] >= 1.5:
+                last_patch[0] = now
+                self._patch(progress_id, progress.card())
+
+        def on_tools(names: list[str]) -> None:
+            progress.on_tools(names)
+            update()
+
+        try:
+            answer = self.agent.answer(list(session.history), text,
+                                       on_progress=on_tools)
+        except Exception as e:  # noqa: BLE001
+            progress.finish(error=str(e)[:120])
+            update(force=True)
+            raise
+        self.sessions.record_turn(session, text, answer)
+
+        progress.advance("doc")
+        update(force=True)
+        file_key = ""
+        try:
+            name = f"{title}_{dt.date.today().isoformat()}.docx"
+            file_key = self._upload_file(name, markdown_to_docx(answer))
+        except Exception:  # noqa: BLE001
+            log.exception("docx delivery failed; falling back to cards")
+
+        progress.finish()
+        update(force=True)
+        if file_key:
+            self._reply(message_id, markdown_card(
+                f"{title}（摘要）",
+                report_summary(answer) + "\n\n完整報告見下方 Word 附件。"))
+            self._reply(message_id, {"msg_type": "file",
+                                     "content": json.dumps({"file_key": file_key})})
+        else:
+            for payload in report_messages(title, answer):
+                self._reply(message_id, payload)

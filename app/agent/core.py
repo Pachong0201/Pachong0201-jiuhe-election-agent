@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Optional
 
 from ..config import Config
 from ..db.store import Store
@@ -42,8 +42,13 @@ class ElectionAgent:
         self.schemas, self.dispatch = build_tools(store, config)
         self._system = system_prompt(config)
 
-    def answer(self, history: list[dict], user_text: str) -> str:
-        """Run the tool loop and return the final assistant message text."""
+    def answer(self, history: list[dict], user_text: str,
+               on_progress: Optional[Callable[[list[str]], None]] = None,
+               ) -> str:
+        """Run the tool loop and return the final assistant message text.
+
+        ``on_progress`` receives the tool names of each round before they run.
+        """
         messages: list[dict] = [{"role": "system", "content": self._system}]
         messages.extend(history)
         messages.append({"role": "user", "content": user_text})
@@ -70,6 +75,11 @@ class ElectionAgent:
                     for tc in tool_calls
                 ],
             })
+            if on_progress is not None:
+                try:
+                    on_progress([tc.function.name for tc in tool_calls])
+                except Exception:  # noqa: BLE001
+                    log.exception("progress callback failed")
             for tc in tool_calls:
                 log.info("tool %s(%s)", tc.function.name,
                          (tc.function.arguments or "")[:120])

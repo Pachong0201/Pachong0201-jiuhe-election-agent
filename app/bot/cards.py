@@ -81,3 +81,24 @@ def report_messages(title: str, body_md: str) -> list[dict]:
         suffix = f"（{i + 1}/{len(parts)}）" if len(parts) > 1 else ""
         messages.append(markdown_card(f"{title}{suffix}", part))
     return messages or [text_message("（報告內容為空）")]
+
+
+def report_summary(body_md: str, limit: int = MAX_CARD_CHARS) -> str:
+    """Card-sized digest of a report: overall verdict + viewpoint titles."""
+    out: list[str] = []
+    for raw in body_md.splitlines():
+        line = raw.strip()
+        if "研判：" in line and not out:
+            out.append(line if line.startswith("**") else f"**{line}**")
+        elif line.startswith("### "):
+            out.append(f"\n**{line[4:].strip()}**")
+        elif line.startswith("**觀點") and line.endswith("**"):
+            out.append("・" + line.strip("*").strip())
+    # drop party/section headings that ended up with no viewpoints under them
+    out = [ln for i, ln in enumerate(out)
+           if not (ln.startswith("\n**") and
+                   (i + 1 == len(out) or out[i + 1].startswith("\n**")))]
+    text = "\n".join(out).strip()
+    if not text:
+        text = body_md[:600]
+    return text[:limit]
