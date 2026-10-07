@@ -37,11 +37,33 @@ log = logging.getLogger(__name__)
 REPORT_RE = re.compile(r"^/report\s*(.*)$", re.I)
 RESET_RE = re.compile(r"^/reset\s*$", re.I)
 HELP_RE = re.compile(r"^/(help|幫助|帮助)\s*$", re.I)
-# free-text questions that ask for a race situation report
-ANALYSIS_RE = re.compile(r"選情|選戰|態勢|情势|分析報告|分析报告|如何|怎麼樣|怎么样")
+# free-text questions that ask for a race situation report (繁/简 both)
+ANALYSIS_RE = re.compile(
+    r"選情|选情|選戰|选战|選舉|选举|態勢|态势|情勢|情势|研判|分析|報告|报告|"
+    r"如何|怎麼樣|怎么样")
+# simplified spellings -> canonical traditional county names
+_SIMPLIFIED = {
+    "桃园": "桃園", "嘉义": "嘉義", "宜兰": "宜蘭", "云林": "雲林", "屏东": "屏東",
+    "花莲": "花蓮", "台东": "臺東", "金门": "金門", "连江": "連江", "马祖": "連江",
+}
 COUNTY_RE = re.compile(
     r"台北|臺北|新北|桃園|台中|臺中|台南|臺南|高雄|基隆|新竹|嘉義|宜蘭|彰化|南投|"
-    r"雲林|苗栗|屏東|花蓮|臺東|台東|澎湖|金門|連江|馬祖")
+    r"雲林|苗栗|屏東|花蓮|臺東|台東|澎湖|金門|連江|馬祖|" + "|".join(_SIMPLIFIED))
+
+
+def route(text: str) -> tuple[str, str]:
+    """Classify a message: ("report", county) for situation reports, else ("chat", "")."""
+    m = REPORT_RE.match(text)
+    if m is not None:
+        arg = m.group(1).strip()
+        for simp, trad in _SIMPLIFIED.items():
+            arg = arg.replace(simp, trad)
+        return "report", arg
+    c = COUNTY_RE.search(text)
+    if c and ANALYSIS_RE.search(text):
+        return "report", _SIMPLIFIED.get(c.group(0), c.group(0))
+    return "chat", ""
+
 
 HELP_TEXT = (
     "**九合一選情分析智能體**\n"
@@ -188,19 +210,9 @@ class FeishuBot:
                 "使用者要求完整報告但未指定縣市，請詢問要分析哪個縣市。"
             )
 
-        report_match = REPORT_RE.match(text)
-        if report_match is not None:
-            county = report_match.group(1).strip()
-            threading.Thread(
-                target=self._handle_query,
-                args=(msg.message_id, chat_id, report_prompt(county), True),
-                daemon=True,
-            ).start()
-            return
-
-        # free-text analysis questions get the same structured report
-        if COUNTY_RE.search(text) and ANALYSIS_RE.search(text):
-            county = COUNTY_RE.search(text).group(0)  # type: ignore[union-attr]
+        kind, county = route(text)
+        log.info("message route=%s county=%s text=%r", kind, county, text[:60])
+        if kind == "report":
             threading.Thread(
                 target=self._handle_query,
                 args=(msg.message_id, chat_id, report_prompt(county), True),

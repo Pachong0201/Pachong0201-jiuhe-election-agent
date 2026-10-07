@@ -52,5 +52,21 @@ class TestSessionRouter(unittest.TestCase):
         self.assertEqual(len(s.history), 0)
 
 
+class TestRoute(unittest.TestCase):
+    def test_routes(self):
+        from app.bot.server import route
+        cases = {
+            "高雄选情分析": ("report", "高雄"),
+            "高雄選情如何": ("report", "高雄"),
+            "/report 高雄市": ("report", "高雄市"),
+            "/report 嘉义市": ("report", "嘉義市"),
+            "分析一下桃园市长选举": ("report", "桃園"),
+            "@_user_1 台北选战态势": ("report", "台北"),
+            "誰登記參選": ("chat", ""),
+        }
+        for text, want in cases.items():
+            self.assertEqual(route(text), want, text)
+
+
 if __name__ == "__main__":
     unittest.main()
