@@ -18,8 +18,11 @@ TOOL_STAGE = {"web_search": "search", "fetch_url": "read",
 
 
 class Progress:
-    def __init__(self, title: str):
+    def __init__(self, title: str, search_label: str = ""):
         self.title = title
+        self.labels = dict(STAGES)
+        if search_label:
+            self.labels["search"] = search_label
         self.started = time.monotonic()
         self.current = "data"
         self.done = False
@@ -45,7 +48,8 @@ class Progress:
     def render(self) -> str:
         cur = _ORDER.index(self.current)
         lines = []
-        for i, (key, label) in enumerate(STAGES):
+        for i, key in enumerate(_ORDER):
+            label = self.labels[key]
             if key == "search" and self.searches:
                 label += f"（已搜尋 {self.searches} 次）"
             if key == "read" and self.reads:

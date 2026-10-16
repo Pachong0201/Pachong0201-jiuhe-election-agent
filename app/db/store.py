@@ -51,6 +51,26 @@ def normalize_county(name: str) -> str:
     return n
 
 
+_CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_number(t: str) -> int:
+    """Parse 1-99 written as arabic/fullwidth digits or Chinese numerals (三, 十二)."""
+    t = t.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    if t.isdigit():
+        return int(t)
+    if "十" in t:
+        tens, _, ones = t.partition("十")
+        return _CN_DIGITS.get(tens, 1) * 10 + _CN_DIGITS.get(ones, 0)
+    return _CN_DIGITS.get(t, 0)
+
+
+def normalize_district(county: str, number: str | int) -> str:
+    """('台北', '三') -> '臺北市第03選區' — the 選區 naming used by CEC data."""
+    n = number if isinstance(number, int) else _cn_number(str(number))
+    return f"{normalize_county(county)}第{n:02d}選區"
+
+
 class Store:
     def __init__(self, path: str | Path = DEFAULT_DB_PATH):
         self.path = Path(path)
@@ -62,6 +82,14 @@ class Store:
 
     def _init_schema(self) -> None:
         self.conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        # columns added after the first release; CREATE TABLE IF NOT EXISTS skips them
+        for table in ("votes", "candidates", "race_candidates", "polls"):
+            cols = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            if "district" not in cols:
+                self.conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN district TEXT NOT NULL DEFAULT ''")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_votes_district"
+                          " ON votes(election_id, county, district)")
         self.conn.commit()
 
     def close(self) -> None:
@@ -70,13 +98,12 @@ class Store:
     # ------------------------------------------------------------------ write
 
     def upsert_election(self, kind: str, year: int, date: str) -> int:
-        cur = self.conn.execute(
+        # cursor.lastrowid is stale when the upsert takes the UPDATE branch
+        self.conn.execute(
             "INSERT INTO elections(kind, year, date) VALUES (?,?,?) "
             "ON CONFLICT(kind, year) DO UPDATE SET date=excluded.date",
             (kind, year, date),
         )
-        if cur.lastrowid:
-            return cur.lastrowid
         row = self.conn.execute(
             "SELECT id FROM elections WHERE kind=? AND year=?", (kind, year)
         ).fetchone()
@@ -91,12 +118,13 @@ class Store:
         self.conn.execute("DELETE FROM candidates WHERE election_id=?", (election_id,))
         self.conn.execute("DELETE FROM votes WHERE election_id=?", (election_id,))
         self.conn.executemany(
-            "INSERT INTO candidates(election_id, county, cand_no, name, party, elected)"
-            " VALUES (?,?,?,?,?,?)",
+            "INSERT INTO candidates(election_id, county, district, cand_no, name, party, elected)"
+            " VALUES (?,?,?,?,?,?,?)",
             [
                 (
                     election_id,
                     c["county"],
+                    c.get("district", ""),
                     c["cand_no"],
                     c["name"],
                     c["party"],
@@ -106,12 +134,13 @@ class Store:
             ],
         )
         self.conn.executemany(
-            "INSERT INTO votes(election_id, county, township, village, cand_no, votes, share, elected)"
-            " VALUES (?,?,?,?,?,?,?,?)",
+            "INSERT INTO votes(election_id, county, district, township, village, cand_no, votes, share, elected)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
             [
                 (
                     election_id,
                     v["county"],
+                    v.get("district", ""),
                     v.get("township", ""),
                     v.get("village", ""),
                     v["cand_no"],
@@ -135,28 +164,31 @@ class Store:
         incumbent: bool = False,
         source: str = "",
         updated_at: str = "",
+        district: str = "",
     ) -> None:
         self.conn.execute(
-            "INSERT INTO race_candidates(cycle, county, name, party, office, status, incumbent, source, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?)"
+            "INSERT INTO race_candidates(cycle, county, district, name, party, office, status,"
+            " incumbent, source, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)"
             " ON CONFLICT(cycle, county, name, office) DO UPDATE SET"
-            " party=excluded.party, status=excluded.status, incumbent=excluded.incumbent,"
-            " source=excluded.source, updated_at=excluded.updated_at",
-            (cycle, normalize_county(county), name, party, office, status,
+            " district=excluded.district, party=excluded.party, status=excluded.status,"
+            " incumbent=excluded.incumbent, source=excluded.source, updated_at=excluded.updated_at",
+            (cycle, normalize_county(county), district, name, party, office, status,
              int(incumbent), source, updated_at),
         )
         self.conn.commit()
 
     def add_poll(self, **kw: Any) -> int:
         cur = self.conn.execute(
-            "INSERT INTO polls(org, publish_date, fieldwork_end, county, race, method,"
+            "INSERT INTO polls(org, publish_date, fieldwork_end, county, district, race, method,"
             " sample_n, results_json, source_url, raw_path)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 kw.get("org", ""),
                 kw.get("publish_date", ""),
                 kw.get("fieldwork_end", ""),
                 normalize_county(kw.get("county", "")),
+                kw.get("district", ""),
                 kw.get("race", "county_mayor"),
                 kw.get("method", ""),
                 kw.get("sample_n"),
@@ -210,13 +242,13 @@ class Store:
                        kind: str = "county_mayor") -> list[dict]:
         """County-level candidate results for one election."""
         return self._rows(
-            "SELECT c.name, c.party, v.votes, v.share, c.elected"
+            "SELECT v.district, c.name, c.party, v.votes, v.share, c.elected"
             " FROM votes v JOIN candidates c"
             "  ON c.election_id=v.election_id AND c.cand_no=v.cand_no"
-            "   AND (c.county=v.county OR c.county='全國')"
+            "   AND ((c.county=v.county AND c.district=v.district) OR c.county='全國')"
             " JOIN elections e ON e.id=v.election_id"
             " WHERE e.kind=? AND e.year=? AND v.county=? AND v.township='' AND v.village=''"
-            " ORDER BY v.votes DESC",
+            " ORDER BY v.district, v.votes DESC",
             (kind, year, normalize_county(county)),
         )
 
@@ -224,10 +256,10 @@ class Store:
                          kind: str = "county_mayor") -> list[dict]:
         """Township-level candidate results for one election."""
         return self._rows(
-            "SELECT v.township, c.name, c.party, v.votes, v.share, c.elected"
+            "SELECT v.district, v.township, c.name, c.party, v.votes, v.share, c.elected"
             " FROM votes v JOIN candidates c"
             "  ON c.election_id=v.election_id AND c.cand_no=v.cand_no"
-            "   AND (c.county=v.county OR c.county='全國')"
+            "   AND ((c.county=v.county AND c.district=v.district) OR c.county='全國')"
             " JOIN elections e ON e.id=v.election_id"
             " WHERE e.kind=? AND e.year=? AND v.county=? AND v.township<>'' AND v.village=''"
             " ORDER BY v.township, v.votes DESC",
@@ -236,13 +268,17 @@ class Store:
 
     def race_candidates(self, cycle: str = "2026",
                         county: Optional[str] = None,
-                        office: Optional[str] = "mayor") -> list[dict]:
+                        office: Optional[str] = "mayor",
+                        district: str = "") -> list[dict]:
         """Registered/declared candidates; office=None returns every office."""
         sql = "SELECT * FROM race_candidates WHERE cycle=?"
         params: list = [cycle]
         if county:
             sql += " AND county=?"
             params.append(normalize_county(county))
+        if district:
+            sql += " AND district=?"
+            params.append(district)
         if office:
             sql += " AND office=?"
             params.append(office)
@@ -250,9 +286,15 @@ class Store:
         return self._rows(sql, tuple(params))
 
     def polls_for(self, county: str = "", days: Optional[int] = None,
-                  limit: int = 20) -> list[dict]:
+                  limit: int = 20, race: str = "", district: str = "") -> list[dict]:
         sql = "SELECT * FROM polls"
         cond, params = [], []
+        if race:
+            cond.append("race=?")
+            params.append(race)
+        if district:
+            cond.append("district=?")
+            params.append(district)
         if county:
             cond.append("county=?")
             params.append(normalize_county(county))
@@ -281,6 +323,82 @@ class Store:
         sql += " ORDER BY date DESC LIMIT ?"
         params.append(limit)
         return self._rows(sql, tuple(params))
+
+    # ----------------------------------------------------- legislator / 2028
+
+    def districts(self, county: str, year: int = 2024) -> list[str]:
+        """Legislator 選區 names of a county in a given election year."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT v.district FROM votes v JOIN elections e ON e.id=v.election_id"
+            " WHERE e.kind='regional_legislator' AND e.year=? AND v.county=? AND v.district<>''"
+            " ORDER BY v.district", (year, normalize_county(county))).fetchall()
+        return [r[0] for r in rows]
+
+    def district_results(self, district: str, year: int) -> list[dict]:
+        """District-level regional-legislator results."""
+        return self._rows(
+            "SELECT c.name, c.party, v.votes, v.share, c.elected"
+            " FROM votes v JOIN candidates c ON c.election_id=v.election_id"
+            "  AND c.cand_no=v.cand_no AND c.county=v.county AND c.district=v.district"
+            " JOIN elections e ON e.id=v.election_id"
+            " WHERE e.kind='regional_legislator' AND e.year=? AND v.district=?"
+            "  AND v.township='' AND v.village=''"
+            " ORDER BY v.votes DESC", (year, district))
+
+    def district_townships(self, district: str, year: int) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT v.township FROM votes v JOIN elections e ON e.id=v.election_id"
+            " WHERE e.kind='regional_legislator' AND e.year=? AND v.district=?"
+            "  AND v.township<>'' AND v.village=''", (year, district)).fetchall()
+        return [r[0] for r in rows]
+
+    def overlay_by_district(self, district: str, year: int,
+                            kind: str = "president") -> list[dict]:
+        """Re-aggregate a nationwide race (president / party_list) onto one 選區,
+        using that year's legislator village -> district mapping."""
+        rows = self._rows(
+            "WITH map AS ("
+            " SELECT DISTINCT v.county, v.township, v.village FROM votes v"
+            " JOIN elections e ON e.id=v.election_id"
+            " WHERE e.kind='regional_legislator' AND e.year=? AND v.district=? AND v.village<>'')"
+            " SELECT c.name, c.party, SUM(p.votes) AS votes"
+            " FROM votes p JOIN elections e2 ON e2.id=p.election_id"
+            " JOIN map m ON m.county=p.county AND m.township=p.township AND m.village=p.village"
+            " JOIN candidates c ON c.election_id=p.election_id AND c.cand_no=p.cand_no"
+            "  AND c.county='全國'"
+            " WHERE e2.kind=? AND e2.year=?"
+            " GROUP BY c.cand_no ORDER BY votes DESC", (year, district, kind, year))
+        total = sum(r["votes"] for r in rows) or 1
+        for r in rows:
+            r["share"] = round(100 * r["votes"] / total, 2)
+        return rows
+
+    def legislator_seats(self, year: int, party_list_seats: int = 34,
+                         threshold: float = 5.0) -> dict:
+        """Seat count by party: regional + indigenous winners from the DB, party-list
+        seats re-derived by largest remainder among parties above the threshold."""
+        won: dict[str, dict[str, int]] = {}
+        for kind in ("regional_legislator", "lowland_indigenous", "highland_indigenous"):
+            for r in self.conn.execute(
+                    "SELECT c.party, COUNT(*) FROM candidates c JOIN elections e"
+                    " ON e.id=c.election_id WHERE e.kind=? AND e.year=? AND c.elected=1"
+                    " GROUP BY c.party", (kind, year)):
+                won.setdefault(r[0], {})[kind] = r[1]
+        party_votes = self.county_results("全國", year, "party_list")
+        eligible = [r for r in party_votes if (r["share"] or 0) >= threshold]
+        pool = sum(r["votes"] for r in eligible) or 1
+        quotas = {r["name"]: party_list_seats * r["votes"] / pool for r in eligible}
+        seats = {k: int(q) for k, q in quotas.items()}
+        left = party_list_seats - sum(seats.values())
+        for k in sorted(quotas, key=lambda k: quotas[k] - seats[k], reverse=True)[:left]:
+            seats[k] += 1
+        for k, n in seats.items():
+            won.setdefault(k, {})["party_list"] = n
+        out = [{"party": k, **v, "total": sum(v.values())} for k, v in won.items()]
+        out.sort(key=lambda r: r["total"], reverse=True)
+        return {"year": year, "seats": out,
+                "party_vote": [{"party": r["name"], "votes": r["votes"], "share": r["share"]}
+                               for r in party_votes]}
 
     def search_kb(self, query: str, county: str = "", limit: int = 10) -> list[dict]:
         """Full-text search over events + knowledge, optionally county-scoped.

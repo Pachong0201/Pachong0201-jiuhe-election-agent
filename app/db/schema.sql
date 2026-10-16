@@ -3,7 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS elections (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind        TEXT NOT NULL,            -- county_mayor | president | regional_legislator | township_mayor
+    kind        TEXT NOT NULL,            -- county_mayor | president | regional_legislator | party_list | lowland_indigenous | highland_indigenous
     year        INTEGER NOT NULL,
     date        TEXT NOT NULL,            -- ISO YYYY-MM-DD
     UNIQUE(kind, year)
@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS elections (
 CREATE TABLE IF NOT EXISTS votes (
     election_id INTEGER NOT NULL REFERENCES elections(id),
     county      TEXT NOT NULL,            -- canonical county name, e.g. 臺北市
+    district    TEXT NOT NULL DEFAULT '', -- legislator 選區, e.g. 臺北市第03選區; '' otherwise
     township    TEXT NOT NULL DEFAULT '', -- '' for county-level rows; '全國' election rows use county='全國'
     village     TEXT NOT NULL DEFAULT '', -- '' when township/county level
     cand_no     INTEGER NOT NULL,
@@ -25,6 +26,7 @@ CREATE INDEX IF NOT EXISTS idx_votes ON votes(election_id, county, township);
 CREATE TABLE IF NOT EXISTS candidates (
     election_id INTEGER NOT NULL REFERENCES elections(id),
     county      TEXT NOT NULL,
+    district    TEXT NOT NULL DEFAULT '',
     cand_no     INTEGER NOT NULL,
     name        TEXT NOT NULL,
     party       TEXT NOT NULL,            -- resolved party name; '無黨籍' for independents
@@ -32,14 +34,15 @@ CREATE TABLE IF NOT EXISTS candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_cand ON candidates(election_id, county);
 
--- 2026 (and future) registered/announced candidates for the upcoming race.
+-- Upcoming-race candidates: 2026 registered roster, 2028 prospective names from news.
 CREATE TABLE IF NOT EXISTS race_candidates (
-    cycle       TEXT NOT NULL DEFAULT '2026', -- e.g. '2026'
-    county      TEXT NOT NULL,
+    cycle       TEXT NOT NULL DEFAULT '2026', -- e.g. '2026', '2028'
+    county      TEXT NOT NULL,              -- '全國' for president / party list
+    district    TEXT NOT NULL DEFAULT '',   -- legislator 選區, e.g. 臺北市第03選區
     name        TEXT NOT NULL,
     party       TEXT NOT NULL DEFAULT '',
-    office      TEXT NOT NULL DEFAULT '',   -- mayor | councilor | township_mayor | township_rep | village_chief | unknown
-    status      TEXT NOT NULL DEFAULT 'declared', -- declared | registered | withdrawn
+    office      TEXT NOT NULL DEFAULT '',   -- mayor | councilor | ... | president | vice_president | legislator | indigenous_legislator
+    status      TEXT NOT NULL DEFAULT 'declared', -- prospective | shortlisted | declared | nominated | registered | withdrawn
     incumbent   INTEGER NOT NULL DEFAULT 0,
     source      TEXT NOT NULL DEFAULT '',
     updated_at  TEXT NOT NULL DEFAULT '',
@@ -51,8 +54,9 @@ CREATE TABLE IF NOT EXISTS polls (
     org           TEXT NOT NULL,          -- polling org, e.g. TVBS
     publish_date  TEXT NOT NULL DEFAULT '',
     fieldwork_end TEXT NOT NULL DEFAULT '',
-    county        TEXT NOT NULL DEFAULT '',
-    race          TEXT NOT NULL DEFAULT 'county_mayor',
+    county        TEXT NOT NULL DEFAULT '',   -- '全國' for national polls
+    district      TEXT NOT NULL DEFAULT '',
+    race          TEXT NOT NULL DEFAULT 'county_mayor', -- county_mayor | president | legislator | party_list
     method        TEXT NOT NULL DEFAULT '',
     sample_n      INTEGER,
     results_json  TEXT NOT NULL DEFAULT '{}', -- {"候選人": pct, ...}

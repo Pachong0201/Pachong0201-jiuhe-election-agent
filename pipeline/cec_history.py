@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import re
 import csv
 import io
 import logging
@@ -61,7 +62,16 @@ ELECTION_DIRS: dict[tuple[str, int], tuple[str, tuple[str, ...]]] = {
     ("regional_legislator", 2016): ("2016-01-16", ("2016總統立委/區域立委",)),
     ("regional_legislator", 2020): ("2020-01-11", ("2020總統立委/區域立委",)),
     ("regional_legislator", 2024): ("2024-01-13", ("2024總統立委/區域立委",)),
+    **{(kind, y): (d, (f"{y}總統立委/{sub}",))
+       for y, d in ((2016, "2016-01-16"), (2020, "2020-01-11"), (2024, "2024-01-13"))
+       for kind, sub in (("party_list", "不分區政黨"),
+                         ("lowland_indigenous", "平地立委"),
+                         ("highland_indigenous", "山地立委"))},
 }
+# indigenous seats are nationwide; village rows add bulk without analytic value.
+# party_list keeps villages so party votes can be re-aggregated by 選區.
+NO_VILLAGE_KINDS = {"lowland_indigenous", "highland_indigenous"}
+DISTRICT_NAME_RE = re.compile(r"第\d+選區$")
 
 COUNTY_FIX = {
     "台北市": "臺北市", "桃園縣": "桃園市", "台中縣": "臺中縣", "台中市": "臺中市",
@@ -120,7 +130,7 @@ def _canon_county(name: str) -> str:
 
 def import_family(zf: zipfile.ZipFile, name_map: dict[str, str],
                   prefix: str, store: Store, election_id: int,
-                  seen_counties: set[str]) -> int:
+                  seen_counties: set[str], keep_villages: bool = True) -> int:
     """Import one 5-CSV family. Returns rows written."""
     def find(suffix: str) -> str | None:
         want = f"{prefix}/{suffix}"
@@ -150,31 +160,35 @@ def import_family(zf: zipfile.ZipFile, name_map: dict[str, str],
     # district code -> canonical name. The county is keyed by (c1, c2):
     # most files use c2, but C1/prv (直轄市) puts the city in c1 and '000' in c2.
     county_name: dict[tuple[str, str], str] = {}
+    # legislator 選區 rows share c4='000' with the county row; c3 is the district code
+    district_name: dict[tuple[str, str, str], str] = {}
     township_name: dict[tuple[str, str, str], str] = {}
     village_name: dict[tuple[str, str, str, str], str] = {}
     for r in decode_csv(zf.read(raw_base)):
         if len(r) < 6:
             continue
-        c1, c2, _c3, c4, c5, name = r[:6]
-        if c4 == "000":                      # county-level row (or 全國)
+        c1, c2, c3, c4, c5, name = r[:6]
+        if c4 == "000" and DISTRICT_NAME_RE.search(name):
+            district_name[(c1, c2, c3)] = _canon_county(name[:3]) + name[3:]
+        elif c4 == "000":                    # county-level row (or 全國)
             county_name[(c1, c2)] = _canon_county(name)
         elif c5 == "0000":                   # township-level row
             township_name[(c1, c2, c4)] = name
         else:                                # village-level row
             village_name[(c1, c2, c4, c5)] = name
 
-    # candidates: key (c1, c2, cand_no) -> (name, party, elected)
-    cands: dict[tuple[str, str, str], tuple[str, str, int]] = {}
+    # candidates: key (c1, c2, c3, cand_no) -> (name, party, elected)
+    cands: dict[tuple[str, str, str, str], tuple[str, str, int]] = {}
     for r in decode_csv(zf.read(raw_cand)):
         if len(r) < 14:
             continue
-        c1, c2, cand_no, name, party_code = r[0], r[1], r[5], r[6], r[7]
+        c1, c2, c3, cand_no, name, party_code = r[0], r[1], r[2], r[5], r[6], r[7]
         # presidential tickets list 正/副 candidates on consecutive rows sharing
-        # cand_no, 正 first — keep the first row per (county, cand_no)
-        if (c1, c2, cand_no) in cands:
+        # cand_no, 正 first — keep the first row per (county, district, cand_no)
+        if (c1, c2, c3, cand_no) in cands:
             continue
         elected = 1 if "*" in r[13:16] else 0
-        cands[(c1, c2, cand_no)] = (
+        cands[(c1, c2, c3, cand_no)] = (
             name,
             parties.get(party_code, "無黨籍" if party_code in ("999", "") else party_code),
             elected,
@@ -187,7 +201,9 @@ def import_family(zf: zipfile.ZipFile, name_map: dict[str, str],
         # marks a district aggregate row (county/township/village totals)
         if len(r) < 9 or r[5].strip("0") != "":
             continue
-        c1, c2, _c3, c4, c5 = r[0], r[1], r[2], r[3], r[4]
+        c1, c2, c3, c4, c5 = r[0], r[1], r[2], r[3], r[4]
+        if c5 != "0000" and not keep_villages:
+            continue
         cand_no, votes_s, share_s, flag = r[6], r[7], r[8], r[9] if len(r) > 9 else ""
         county = county_name.get((c1, c2), f"{c1}/{c2}")
         township, village = "", ""
@@ -207,31 +223,33 @@ def import_family(zf: zipfile.ZipFile, name_map: dict[str, str],
         except ValueError:
             share_f = None
         vote_rows.append({
-            "county": county, "township": township, "village": village,
+            "county": county, "district": district_name.get((c1, c2, c3), ""),
+            "township": township, "village": village,
             "cand_no": int(cand_no), "votes": votes_i, "share": share_f,
             "elected": 1 if "*" in flag else 0,
         })
         n_votes += 1
         seen_counties.add(county)
 
-    for (c1, c2, cand_no), (name, party, elected) in cands.items():
-        county = county_name.get((c1, c2), f"{c1}/{c2}")
+    for (c1, c2, c3, cand_no), (name, party, elected) in cands.items():
+        county = "全國" if (c1, c2) == ("00", "000") else county_name.get((c1, c2), f"{c1}/{c2}")
         cand_rows.append({
-            "county": county, "cand_no": int(cand_no),
+            "county": county, "district": district_name.get((c1, c2, c3), ""),
+            "cand_no": int(cand_no),
             "name": name, "party": party, "elected": elected,
         })
 
     # merge into store (candidates rows are county-scoped; votes keep level)
     store.conn.executemany(
-        "INSERT INTO candidates(election_id, county, cand_no, name, party, elected)"
-        " VALUES (?,?,?,?,?,?)",
-        [(election_id, c["county"], c["cand_no"], c["name"], c["party"],
+        "INSERT INTO candidates(election_id, county, district, cand_no, name, party, elected)"
+        " VALUES (?,?,?,?,?,?,?)",
+        [(election_id, c["county"], c["district"], c["cand_no"], c["name"], c["party"],
           c["elected"]) for c in cand_rows],
     )
     store.conn.executemany(
-        "INSERT INTO votes(election_id, county, township, village, cand_no, votes, share, elected)"
-        " VALUES (?,?,?,?,?,?,?,?)",
-        [(election_id, v["county"], v["township"], v["village"], v["cand_no"],
+        "INSERT INTO votes(election_id, county, district, township, village, cand_no, votes, share, elected)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        [(election_id, v["county"], v["district"], v["township"], v["village"], v["cand_no"],
           v["votes"], v["share"], v["elected"]) for v in vote_rows],
     )
     store.conn.commit()
@@ -260,7 +278,8 @@ def run(zip_path: Path, db_path: Path, kinds: set[str]) -> None:
             total = 0
             for p in prefixes:
                 total += import_family(zf, name_map, root_prefix + p,
-                                       store, eid, set())
+                                       store, eid, set(),
+                                       keep_villages=kind not in NO_VILLAGE_KINDS)
             log.info("%s %s: %d vote rows", kind, year, total)
     store.close()
 
@@ -270,7 +289,7 @@ def main() -> None:
     ap.add_argument("--zip", type=Path, default=DEFAULT_ZIP)
     ap.add_argument("--db", type=Path,
                     default=Path(__file__).resolve().parents[1] / "data" / "kb.sqlite3")
-    ap.add_argument("--kinds", default="county_mayor,president,regional_legislator")
+    ap.add_argument("--kinds", default=",".join(sorted({k for k, _ in ELECTION_DIRS})))
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")

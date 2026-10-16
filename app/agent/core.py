@@ -31,6 +31,8 @@ def system_prompt(config: Config) -> str:
         .replace("{{RACE_CYCLE}}", config.race_cycle)
         + "\n\n"
         + _load_prompt("analysis.md")
+        + "\n\n"
+        + _load_prompt("analysis_2028.md")
     )
 
 
