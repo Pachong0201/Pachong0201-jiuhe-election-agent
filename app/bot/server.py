@@ -30,7 +30,8 @@ from lark_oapi.api.im.v1 import (
 from ..agent.core import ElectionAgent
 from ..config import Config
 from ..db.store import normalize_county, normalize_district
-from .cards import markdown_card, report_messages, report_summary, text_message
+from .cards import (clean_report, markdown_card, report_messages, report_summary,
+                    text_message)
 from .docx_report import markdown_to_docx
 from .progress import Progress
 from .session import SessionRouter
@@ -354,6 +355,7 @@ class FeishuBot:
             progress.finish(error=str(e)[:120])
             update(force=True)
             raise
+        answer = clean_report(answer)
         self.sessions.record_turn(session, text, answer)
 
         progress.advance("doc")

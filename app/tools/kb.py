@@ -98,6 +98,16 @@ def district_results_tool(store: Store, district: str, year: int = 2024) -> dict
     }
 
 
+def district_margins_tool(store: Store, year: int = 2024) -> dict:
+    rows = store.district_margins(year)
+    summary: dict[str, dict[str, int]] = {}
+    for r in rows:
+        summary.setdefault(r["winner_party"], {}).setdefault(r["rating"], 0)
+        summary[r["winner_party"]][r["rating"]] += 1
+    return {"year": year, "summary_by_winner_party": summary,
+            "districts": rows, "note": "依當選人與次高者得票率差排序，差距最小者在前"}
+
+
 def legislator_seats_tool(store: Store, year: int = 2024) -> dict:
     out = store.legislator_seats(year)
     out["note"] = ("不分區席次依 5% 門檻與最大餘數法由政黨票推算（34 席），"

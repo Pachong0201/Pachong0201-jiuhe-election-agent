@@ -51,6 +51,8 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
             kb.county_districts_tool(store, county, year),
         "district_results": lambda district, year=2024:
             kb.district_results_tool(store, district, year),
+        "district_margins": lambda year=2024:
+            kb.district_margins_tool(store, year),
         "legislator_seats": lambda year=2024:
             kb.legislator_seats_tool(store, year),
         "record_candidate": lambda **kw: kb.add_candidate_tool(store, **kw),
@@ -101,6 +103,8 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
         _fn("district_results", "查詢某立委選區的歷屆結果：區域立委得票＋同選區總統票與不分區政黨票（選區藍綠白基本盤）",
             {"district": _DISTRICT, "year": {**_YEAR, "description": "2016/2020/2024，預設 2024"}},
             ["district"]),
+        _fn("district_margins", "列出某屆全部區域立委選區的勝負差距與競爭度分類（膠著/競爭/傾向/安全），找翻轉風險選區用",
+            {"year": {**_YEAR, "description": "2016/2020/2024，預設 2024"}}, []),
         _fn("legislator_seats", "查詢某屆立委全國席次結構：各黨區域/原住民/不分區席次與全國政黨票",
             {"year": {**_YEAR, "description": "2016/2020/2024，預設 2024"}}, []),
         _fn("record_candidate", "把新聞中查證的 2028 擬參選人/提名人寫入名單庫（必須附來源）",

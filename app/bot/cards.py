@@ -102,3 +102,12 @@ def report_summary(body_md: str, limit: int = MAX_CARD_CHARS) -> str:
     if not text:
         text = body_md[:600]
     return text[:limit]
+
+
+def clean_report(md: str) -> str:
+    """Drop any chatter the model writes before the report's first H1 heading."""
+    text = md.strip()
+    if text.startswith("# "):
+        return text
+    i = text.find("\n# ")
+    return text[i + 1:] if i >= 0 else text

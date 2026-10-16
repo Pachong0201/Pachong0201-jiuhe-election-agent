@@ -87,6 +87,16 @@ class Store2028Test(unittest.TestCase):
         self.assertEqual(seats["中國國民黨"]["party_list"], 16)
         self.assertEqual(seats["中國國民黨"]["regional_legislator"], 1)
 
+    def test_district_margins_rating(self):
+        rows = self.store.district_margins(2024)
+        d1 = next(r for r in rows if r["district"] == "臺北市第01選區")
+        self.assertEqual((d1["winner"], d1["margin_pp"], d1["rating"]), ("藍甲", 20.0, "安全"))
+
+    def test_clean_report_drops_preamble(self):
+        from app.bot.cards import clean_report
+        self.assertEqual(clean_report("I have everything.\n\n---\n\n# 標題\n內容"), "# 標題\n內容")
+        self.assertEqual(clean_report("# 標題\n內容"), "# 標題\n內容")
+
     def test_prospective_candidate_and_poll_roundtrip(self):
         kb.add_candidate_tool(self.store, cycle="2028", office="president", name="某甲",
                               party="中國國民黨", status="prospective",

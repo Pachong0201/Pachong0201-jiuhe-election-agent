@@ -373,6 +373,31 @@ class Store:
             r["share"] = round(100 * r["votes"] / total, 2)
         return rows
 
+    def district_margins(self, year: int = 2024) -> list[dict]:
+        """Winner vs runner-up margin for every 選區, rated on the report scale
+        (<2pp 膠著, 2–5 競爭, 5–10 傾向, >10 安全)."""
+        rows = self._rows(
+            "SELECT v.district, c.name, c.party, v.share"
+            " FROM votes v JOIN candidates c ON c.election_id=v.election_id"
+            "  AND c.cand_no=v.cand_no AND c.county=v.county AND c.district=v.district"
+            " JOIN elections e ON e.id=v.election_id"
+            " WHERE e.kind='regional_legislator' AND e.year=? AND v.district<>''"
+            "  AND v.township='' AND v.village=''"
+            " ORDER BY v.district, v.share DESC", (year,))
+        by: dict[str, list[dict]] = {}
+        for r in rows:
+            by.setdefault(r["district"], []).append(r)
+        out = []
+        for d, rs in by.items():
+            first, second = rs[0], (rs[1] if len(rs) > 1 else {"name": "", "party": "", "share": 0})
+            m = round((first["share"] or 0) - (second["share"] or 0), 2)
+            rating = "膠著" if m < 2 else "競爭" if m < 5 else "傾向" if m < 10 else "安全"
+            out.append({"district": d, "winner": first["name"], "winner_party": first["party"],
+                        "runner_up": second["name"], "runner_up_party": second["party"],
+                        "margin_pp": m, "rating": rating})
+        out.sort(key=lambda r: r["margin_pp"])
+        return out
+
     def legislator_seats(self, year: int, party_list_seats: int = 34,
                          threshold: float = 5.0) -> dict:
         """Seat count by party: regional + indigenous winners from the DB, party-list
