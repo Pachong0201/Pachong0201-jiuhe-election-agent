@@ -65,4 +65,5 @@ tests/    單元測試
 
 - TVBS 民調 PDF 解析是 best-effort；解析不出的原始文件留在 `data/cache/polls/` 供人工補錄
 - 區域立委的選區維度未細分（同縣市多選區的候選人 join 是近似值），主軸縣市長不受影響
+- 設了 `NEWS_DB_PATH`（指向新聞監測 tw-news-monitor-simple 的 `data/news.db`）時，`web_search` 先唯讀查這個新聞庫，再用即時檢索補充並去重；未設或檔案不存在則只走即時檢索
 - 即時檢索預設走 Google 新聞 RSS（繁中台灣新聞，免 key），DuckDuckGo 備援；有 Tavily key 可切 `SEARCH_PROVIDER=tavily`

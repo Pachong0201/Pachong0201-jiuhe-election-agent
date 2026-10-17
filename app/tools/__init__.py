@@ -67,7 +67,7 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
             kb.add_event_tool(store, county, date, kind, summary, source_url),
         "web_search": lambda query, max_results=6:
             web.web_search(query, max_results, config.search_provider,
-                           config.tavily_api_key),
+                           config.tavily_api_key, config.news_db_path),
         "fetch_url": lambda url: web.fetch_url(url),
     }
 
@@ -147,7 +147,7 @@ def build_tools(store: Store, config: Config) -> tuple[list[dict], dict[str, Cal
              "kind": {"type": "string", "description": "rally|poll_release|scandal|endorsement|registration|other"},
              "summary": {"type": "string"},
              "source_url": {"type": "string"}}, ["county", "date", "kind", "summary"]),
-        _fn("web_search", "即時網路檢索最新選情、民調、新聞（台灣地區中文結果優先）",
+        _fn("web_search", "檢索最新選情、民調、新聞：先查團隊新聞監測庫（provider=news_monitor），再以即時網路檢索補充；關鍵詞以空格分隔",
             {"query": {"type": "string"},
              "max_results": {"type": "integer", "description": "預設6"}}, ["query"]),
         _fn("fetch_url", "抓取指定網頁/PDF正文（用於讀取檢索到的具體來源）",

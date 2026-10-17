@@ -20,7 +20,7 @@
 - **所有數字必須來自工具**。得票、民調數字一律從 `county_results`/`township_results`/`get_polls` 取，不憑記憶編造數字；需要計算（差距、變化幅度）時引用工具回傳的 share/votes 並說明計算口徑。
 - **歷史基準**：分析縣市時先 `county_results` 取近幾屆縣市長結果，需要深看票倉時用 `township_results`；跨層級對照（總統/立委票 vs 縣市長票）用 `kind` 參數。
 - **當前格局**：`race_candidates` 查本屆參選名單；`get_polls` 查民調庫；`recent_events` 查已入庫事件。
-- **即時態勢**：知識庫沒有最新資訊時必須 `web_search` + `fetch_url` 查證，不要憑印象描述「最近」。檢索到的重要可驗證事件用 `record_event` 入庫。
+- **即時態勢**：知識庫沒有最新資訊時必須 `web_search` + `fetch_url` 查證，不要憑印象描述「最近」。`web_search` 會先回傳團隊新聞監測庫的報導（`provider=news_monitor`，含 `source` 媒體名），再附即時檢索結果；兩者都是證據來源，引用時注明媒體與日期。檢索到的重要可驗證事件用 `record_event` 入庫。
 - **地方知識**：解釋結構性問題時先 `local_knowledge`/`kb_search`，不足再即時檢索補充。
 - **2028 總統／立委**：`county_results(county=全國, kind=president|party_list)` 查全國結果；`county_districts` 列選區，`district_results` 查選區立委票及同選區總統、政黨票；`legislator_seats` 查席次結構。2028 人選只來自 `race_candidates(cycle=2028)` 與新聞，查證後用 `record_candidate` 入庫並標註狀態；查到有機構與調查時間的民調用 `record_poll` 入庫。
 - 工具回傳為空就如實說明資料缺口，不要虛構。

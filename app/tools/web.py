@@ -19,12 +19,32 @@ from xml.etree import ElementTree as ET
 
 import httpx
 
+from .news_archive import search_archive
+
 _UA = {"User-Agent": "Mozilla/5.0 (jiuhe-election-agent)"}
 _MAX_CHARS = 6000
 
 
-def web_search(query: str, max_results: int = 6,
-               provider: str = "auto", tavily_key: str = "") -> dict:
+def web_search(query: str, max_results: int = 6, provider: str = "auto",
+               tavily_key: str = "", archive_path: str = "") -> dict:
+    """Team news-monitor archive first, then the live provider fills in."""
+    local = search_archive(archive_path, query, max_results) if archive_path else []
+    live = _live_search(query, max_results, provider, tavily_key)
+    if not local:
+        return live
+    seen = {_title_key(r["title"]) for r in local} | {r["url"] for r in local}
+    extra = [r for r in live.get("results", [])
+             if r.get("url") not in seen and _title_key(r.get("title", "")) not in seen]
+    return {"query": query, "provider": f"news_monitor+{live.get('provider', '')}",
+            "results": local + extra}
+
+
+def _title_key(title: str) -> str:
+    """Google News titles carry a ' - 媒體名' suffix; compare on the headline only."""
+    return re.sub(r"\s+-\s+[^-]+$", "", title).replace(" ", "")
+
+
+def _live_search(query: str, max_results: int, provider: str, tavily_key: str) -> dict:
     if provider == "tavily":
         return _tavily(query, max_results, tavily_key)
     if provider in ("auto", "gnews"):

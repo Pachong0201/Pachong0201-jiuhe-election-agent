@@ -46,6 +46,8 @@ class Config:
     # Web retrieval
     search_provider: str = os.environ.get("SEARCH_PROVIDER", "auto")
     tavily_api_key: str = os.environ.get("TAVILY_API_KEY", "")
+    # tw-news-monitor-simple 的 data/news.db；留空則只用即時檢索
+    news_db_path: str = os.environ.get("NEWS_DB_PATH", "")
 
     # Storage
     db_path: Path = field(
