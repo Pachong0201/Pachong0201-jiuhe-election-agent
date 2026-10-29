@@ -369,6 +369,8 @@ class FeishuBot:
 
         progress.finish()
         update(force=True)
+        log.info("report done: %s chars=%d docx=%s", title, len(answer),
+                 "uploaded" if file_key else "failed, using cards")
         if file_key:
             self._reply(message_id, markdown_card(
                 f"{title}（摘要）",
