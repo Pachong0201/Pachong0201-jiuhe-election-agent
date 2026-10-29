@@ -1,6 +1,7 @@
 """Agent loop smoke test with a stubbed LLM (no network)."""
 
 import json
+from dataclasses import replace
 import tempfile
 import unittest
 from pathlib import Path
@@ -70,6 +71,16 @@ class TestAgentLoop(unittest.TestCase):
         agent = ElectionAgent(llm, self.store, self.config)
         answer = agent.answer([], "test")
         self.assertTrue(answer)
+
+    def test_rounds_exhausted_forces_final_answer(self):
+        llm = _StubLLM([
+            _resp(tool_calls=[_tc("list_elections", {})]),
+            _resp(tool_calls=[_tc("list_elections", {})]),
+            _resp(content="# 臺北市選情研判"),
+        ])
+        agent = ElectionAgent(llm, self.store, replace(self.config, max_tool_rounds=2))
+        self.assertEqual(agent.answer([], "台北選情"), "# 臺北市選情研判")
+        self.assertEqual(llm.calls, 3)
 
 
 if __name__ == "__main__":

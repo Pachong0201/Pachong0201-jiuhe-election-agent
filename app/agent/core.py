@@ -36,6 +36,10 @@ def system_prompt(config: Config) -> str:
     )
 
 
+_FINALIZE = ("檢索輪數已用完，不能再呼叫工具。請立即依據上面已取得的工具結果，"
+             "按原定格式寫出完整回覆；查不到的部分在資料缺口中如實標註，不要虛構。")
+
+
 class ElectionAgent:
     def __init__(self, llm: LLM, store: Store, config: Config):
         self.llm = llm
@@ -93,4 +97,10 @@ class ElectionAgent:
                     "content": result[:20000],
                 })
 
-        return "（查詢輪數達上限，請把問題拆小再問一次）"
+        # Out of tool rounds: make the model write up what it already gathered
+        # instead of discarding a full round of evidence.
+        log.warning("tool rounds exhausted (%d); forcing final answer",
+                    self.config.max_tool_rounds)
+        messages.append({"role": "user", "content": _FINALIZE})
+        resp = self.llm.chat(messages)
+        return (resp.choices[0].message.content or "").strip() or "（無法產生回覆）"
