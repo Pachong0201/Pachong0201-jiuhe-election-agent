@@ -62,7 +62,7 @@ class Config:
     )
 
     # Agent
-    max_tool_rounds: int = int(os.environ.get("MAX_TOOL_ROUNDS", "16"))
+    max_tool_rounds: int = int(os.environ.get("MAX_TOOL_ROUNDS", "30"))
     session_history_turns: int = int(os.environ.get("SESSION_HISTORY_TURNS", "20"))
     race_cycle: str = os.environ.get("RACE_CYCLE", "2026")
 
