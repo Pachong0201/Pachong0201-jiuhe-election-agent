@@ -22,7 +22,12 @@ def search_archive(db_path: str | Path, query: str, max_results: int = 6,
     if not path or not path.is_file() or not terms:
         return []
     since = (date.today() - timedelta(days=days)).isoformat()
-    conn = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    # as_uri() percent-encodes spaces and handles Windows drive letters.
+    try:
+        conn = sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True,
+                               timeout=5)
+    except sqlite3.Error:
+        return []
     conn.row_factory = sqlite3.Row
     try:
         while terms:

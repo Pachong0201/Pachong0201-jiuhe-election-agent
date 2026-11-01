@@ -70,3 +70,23 @@ class NewsArchiveTest(unittest.TestCase):
                          ["https://a/4", "https://a/1", "https://b/9"])
         with patch.object(web, "_live_search", return_value=live):
             self.assertIs(web.web_search("柯志恩"), live)
+
+
+class DeployPathTest(unittest.TestCase):
+    def test_path_with_spaces_and_bom_env(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "TW News-Monitor111" / "news.db"
+            db.parent.mkdir()
+            conn = sqlite3.connect(db)
+            conn.execute(SCHEMA)
+            conn.execute("INSERT INTO articles(source_id, source_name, category, title, url,"
+                         " published_at, fetched_at, position) VALUES"
+                         " ('cna','中央社','politics','花蓮縣長選戰','https://x/1',?,?,0)",
+                         (_day(1), _day(0)))
+            conn.commit()
+            conn.close()
+            self.assertEqual(len(search_archive(str(db), "花蓮縣長")), 1)
+
+    def test_provider_none_skips_live_search(self):
+        out = web.web_search("任何", provider="none")
+        self.assertEqual(out["results"], [])

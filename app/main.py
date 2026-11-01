@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 
 from .agent.core import ElectionAgent
 from .agent.llm import LLM
@@ -13,11 +14,18 @@ from .db.store import Store
 
 
 def main() -> int:
+    config = Config()
+    log_file = config.db_path.parent / "bot.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            RotatingFileHandler(log_file, maxBytes=10_000_000, backupCount=5,
+                                encoding="utf-8"),
+        ],
     )
-    config = Config()
     missing = config.missing()
     if missing:
         for key in missing:

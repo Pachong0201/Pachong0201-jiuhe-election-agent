@@ -45,6 +45,8 @@ def _title_key(title: str) -> str:
 
 
 def _live_search(query: str, max_results: int, provider: str, tavily_key: str) -> dict:
+    if provider == "none":
+        return {"query": query, "provider": "none", "results": []}
     if provider == "tavily":
         return _tavily(query, max_results, tavily_key)
     if provider in ("auto", "gnews"):

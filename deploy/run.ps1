@@ -1,12 +1,16 @@
-# Start the Feishu bot (Windows). Run from the repo root or pass -RepoDir.
-# Register as a scheduled task — see windows.md.
+﻿# Start the Feishu bot (Windows) and restart it if it exits. See windows.md.
+# Logs: data\bot.log (written by the bot itself, UTF-8, rotated at 10MB).
 param(
-    [string]$RepoDir = $PSScriptRoot + "\.."
+    [string]$RepoDir = (Join-Path $PSScriptRoot "..")
 )
 Set-Location (Resolve-Path $RepoDir)
+$env:PYTHONUTF8 = "1"
 
-# Prefer the project venv if it exists
-$venvPy = Join-Path $RepoDir ".venv\Scripts\python.exe"
+$venvPy = Join-Path (Get-Location) ".venv\Scripts\python.exe"
 $python = if (Test-Path $venvPy) { $venvPy } else { "python" }
 
-& $python -m app.main 2>&1 | Tee-Object -FilePath (Join-Path $RepoDir "data\bot.log") -Append
+while ($true) {
+    & $python -m app.main *> $null
+    if ($LASTEXITCODE -eq 2) { break }   # missing .env settings: do not loop
+    Start-Sleep -Seconds 30
+}
