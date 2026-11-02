@@ -41,7 +41,9 @@ class LLM:
         spec = PROVIDERS[provider]
         self.provider = provider
         self.model = model or spec["default_model"]
-        self.client = OpenAI(base_url=spec["base_url"], api_key=api_key)
+        # SDK default is 600s x 3 attempts: a stalled call would freeze a report for 30 min
+        self.client = OpenAI(base_url=spec["base_url"], api_key=api_key,
+                             timeout=180, max_retries=2)
 
     def chat(
         self,

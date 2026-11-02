@@ -13,6 +13,24 @@ from .config import Config
 from .db.store import Store
 
 
+def _disable_quick_edit() -> None:
+    """Windows console QuickEdit: a mouse click in the window pauses every write
+    to the console, which freezes logging and with it the whole bot."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            # clear ENABLE_QUICK_EDIT_MODE (0x40), keep ENABLE_EXTENDED_FLAGS (0x80)
+            kernel32.SetConsoleMode(handle, (mode.value & ~0x40) | 0x80)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def main() -> int:
     config = Config()
     log_file = config.db_path.parent / "bot.log"
@@ -21,11 +39,12 @@ def main() -> int:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=[
-            logging.StreamHandler(),
             RotatingFileHandler(log_file, maxBytes=10_000_000, backupCount=5,
                                 encoding="utf-8"),
+            *([logging.StreamHandler()] if sys.stderr else []),
         ],
     )
+    _disable_quick_edit()
     missing = config.missing()
     if missing:
         for key in missing:
