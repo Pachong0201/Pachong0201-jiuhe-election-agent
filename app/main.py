@@ -8,6 +8,9 @@ from logging.handlers import RotatingFileHandler
 
 from .agent.core import ElectionAgent
 from .agent.llm import LLM
+from lark_oapi.ws.client import loop as ws_loop
+
+from .bot.health import Health, LarkConnWatcher, start_watchdog
 from .bot.server import FeishuBot
 from .config import Config
 from .db.store import Store
@@ -55,7 +58,10 @@ def main() -> int:
     store = Store(config.db_path)
     llm = LLM(config.llm_provider, config.llm_api_key(), config.llm_model)
     agent = ElectionAgent(llm, store, config)
-    bot = FeishuBot(config, agent)
+    health = Health()
+    logging.getLogger("Lark").addHandler(LarkConnWatcher(health))
+    bot = FeishuBot(config, agent, health)
+    start_watchdog(ws_loop)
     bot.start()  # blocks on the WS loop
     return 0
 

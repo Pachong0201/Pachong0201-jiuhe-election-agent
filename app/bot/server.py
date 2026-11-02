@@ -33,6 +33,7 @@ from ..db.store import normalize_county, normalize_district
 from .cards import (clean_report, markdown_card, report_messages, report_summary,
                     text_message)
 from .docx_report import markdown_to_docx
+from .health import Health
 from .progress import Progress
 from .session import SessionRouter
 
@@ -41,6 +42,7 @@ log = logging.getLogger(__name__)
 REPORT_RE = re.compile(r"^/report\s*(.*)$", re.I)
 RESET_RE = re.compile(r"^/reset\s*$", re.I)
 HELP_RE = re.compile(r"^/(help|幫助|帮助)\s*$", re.I)
+STATUS_RE = re.compile(r"^/(status|狀態|状态)\s*$", re.I)
 # free-text questions that ask for a race situation report (繁/简 both)
 ANALYSIS_RE = re.compile(
     r"選情|选情|選戰|选战|選舉|选举|大選|大选|態勢|态势|情勢|情势|研判|分析|報告|报告|"
@@ -165,6 +167,7 @@ HELP_TEXT = (
     "・`/report <縣市>` — 產出該縣市完整分析報告\n"
     "・`/report 總統`、`/report 臺北市第3選區`、`/report 立委` — 2028 總統/立委報告\n"
     "・`/reset` — 清空本對話上下文\n"
+    "・`/status` — 機器人運行狀態\n"
     "・`/help` — 本說明"
 )
 
@@ -182,8 +185,10 @@ def _extract_text(message) -> str:
 
 
 class FeishuBot:
-    def __init__(self, config: Config, agent: ElectionAgent):
+    def __init__(self, config: Config, agent: ElectionAgent,
+                 health: Optional[Health] = None):
         self.config = config
+        self.health = health or Health()
         self.agent = agent
         self.sessions = SessionRouter(config.session_history_turns)
 
@@ -283,6 +288,11 @@ class FeishuBot:
                             text_message("目前只支援文字消息（報告會以卡片回覆）。"))
             return
 
+        self.health.bump("received")
+        if STATUS_RE.match(text):
+            self._reply(msg.message_id, text_message(
+                self.health.status_text(self.sessions.busy_count())))
+            return
         if RESET_RE.match(text):
             self.sessions.reset(chat_id)
             self._reply(msg.message_id, text_message("上下文已清空。"))
@@ -324,6 +334,7 @@ class FeishuBot:
                 self._reply(message_id, payload)
         except Exception as e:  # noqa: BLE001
             log.exception("query failed")
+            self.health.error(f"{type(e).__name__}: {e}")
             self._reply(message_id, text_message(f"分析時出錯：{e}"[:300]))
         finally:
             self.sessions.release(chat_id)
@@ -369,6 +380,7 @@ class FeishuBot:
 
         progress.finish()
         update(force=True)
+        self.health.bump("reports_ok")
         log.info("report done: %s chars=%d docx=%s", title, len(answer),
                  "uploaded" if file_key else "failed, using cards")
         if file_key:
